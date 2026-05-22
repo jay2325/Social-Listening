@@ -1,0 +1,6 @@
+{
+  "name": "@pulseboard/worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Placeholder package — worker runs in-process with server for v1"
+}
