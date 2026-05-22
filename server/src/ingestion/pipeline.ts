@@ -142,7 +142,7 @@ export class IngestPipeline {
       .add(
         "analyze",
         { platformPostId, text, brandId, platform: "twitter" },
-        { jobId: `twitter:${platformPostId}` } // dedup by tweet ID
+        { jobId: `twitter-${platformPostId}` } // dedup by tweet ID; no colons (BullMQ rejects them)
       )
       .catch((err: Error) =>
         console.error("[IngestPipeline] nlp enqueue error:", err.message)
