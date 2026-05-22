@@ -190,6 +190,18 @@ export class XAdapter implements PlatformAdapter {
         },
       },
       (res) => {
+        if (res.statusCode === 409) {
+          // Stale connection still held open on X's side from a previous session.
+          // Clear all rules (forces X to fully reset stream state), wait 2 s,
+          // re-sync fresh rules, then reconnect.
+          console.warn(
+            "[XAdapter] 409 conflict — stale stream open; clearing rules and retrying in 2 s"
+          );
+          this._handleConflict().catch((err: Error) =>
+            console.error("[XAdapter] conflict resolution error:", err.message)
+          );
+          return;
+        }
         if (res.statusCode === 429) {
           console.warn("[XAdapter] rate limited (429) — backing off");
           this._scheduleReconnect();
@@ -248,6 +260,47 @@ export class XAdapter implements PlatformAdapter {
 
     req.end();
     this.activeRequest = req;
+  }
+
+  /**
+   * Called on HTTP 409: a previous session left a stream connection open on
+   * X's side. Strategy:
+   *   1. Fetch all rules currently registered on X and delete them — this
+   *      clears the stale state that's holding the connection slot.
+   *   2. Wait 2 s for X to fully close the old connection.
+   *   3. Re-sync fresh rules from the DB.
+   *   4. Start the stream again.
+   *
+   * If anything in step 1 fails we still proceed to the retry — worst case
+   * we hit another 409 and loop through here again.
+   */
+  private async _handleConflict(): Promise<void> {
+    if (this.disconnectRequested) return;
+
+    try {
+      const existing = await this._getStreamRules();
+      if (existing.length > 0) {
+        await this._deleteStreamRules(existing.map((r) => r.id));
+        console.log(
+          `[XAdapter] cleared ${existing.length} stale rule(s) from X`
+        );
+      } else {
+        console.log("[XAdapter] no stale rules found on X");
+      }
+    } catch (err) {
+      console.error(
+        "[XAdapter] failed to clear stale rules (continuing anyway):",
+        (err as Error).message
+      );
+    }
+
+    // Give X 2 s to release the connection slot
+    await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+    if (this.disconnectRequested) return;
+
+    // Push fresh rules, then reconnect
+    await this.syncRules();
+    this._startStream();
   }
 
   private _scheduleReconnect(): void {
